@@ -1,1 +1,114 @@
-Results of the performed experiment.
+# Results
+
+This folder contains the three output files produced by `DM_Mini_Project.ipynb` after training and evaluating the regression models. The task is to predict `rej_and_cut_piece`, the quantity of rejected and cut fabric pieces for a weaving production order.
+
+All results are computed on the **held-out test set**: 20% of the cleaned data (24,230 records), split with `random_state=42`. The models never saw these records during training.
+
+| File | What it contains | Rows |
+|------|------------------|------|
+| `model_performance_results.csv` | Error and fit metrics for all six models | 6 |
+| `xgboost_feature_importance.csv` | Importance score of every input feature in XGBoost | 2,217 |
+| `actual_vs_predicted.csv` | True vs predicted rejection for every test record (XGBoost) | 24,230 |
+
+---
+
+## 1. `model_performance_results.csv`
+
+### Purpose
+Compares all six algorithms on the same test set so the best model can be chosen. Rows are sorted by R² score, best first.
+
+### Columns
+
+| Column | Meaning |
+|--------|---------|
+| `Algorithm` | Name of the regression model |
+| `MAE` | Mean Absolute Error: on average, how many pieces the prediction is off by |
+| `RMSE` | Root Mean Squared Error: like MAE, but squaring the errors makes large mistakes count much more |
+| `R2 Score` | Share of the variation in rejections that the model explains. 1.0 is perfect, 0 is no better than always predicting the average |
+
+### Values
+
+| Algorithm | MAE | RMSE | R² |
+|-----------|-----|------|----|
+| Decision Tree | 0.9979 | 9.8738 | 0.9975 |
+| Random Forest | 1.1333 | 15.7654 | 0.9935 |
+| XGBoost | 3.0570 | 19.9606 | 0.9896 |
+| Gradient Boosting | 4.7201 | 22.6516 | 0.9866 |
+| Linear Regression | 10.3253 | 68.7545 | 0.8769 |
+| Mean Baseline | 27.9456 | 195.9679 | -0.0000 |
+
+### How to read it
+- **Best model:** the Decision Tree is off by about 1 piece on average (MAE 0.998) and explains 99.75% of the variation.
+- **Tree-based models dominate.** The four tree models score R² above 0.98, while Linear Regression reaches only 0.877. The link between production details and rejections is non-linear, with sharp jumps between fabric types and order sizes.
+- **Baseline check.** The Mean Baseline always predicts the average rejection. Its R² is essentially 0 (the file stores it as about -6e-07) and its RMSE of 195.97 equals the standard deviation of the target. Every real model beats it by a wide margin.
+- **MAE vs RMSE gap.** For every model, RMSE is much larger than MAE (for Decision Tree, 9.87 vs 1.00). Most predictions are very close, but a small number of large orders produce big errors, and RMSE is sensitive to those.
+
+---
+
+## 2. `xgboost_feature_importance.csv`
+
+### Purpose
+Shows which inputs the XGBoost model relied on most. Rows are sorted from most to least important.
+
+### Columns
+
+| Column | Meaning |
+|--------|---------|
+| `Feature` | Feature name after preprocessing. `num__` marks a numerical column. `cat__` marks one binary (0/1) column created by one-hot encoding a category, for example `cat__construction_60x60/130x80` means "fabric construction is 60x60/130x80" |
+| `Importance` | XGBoost's importance score. All scores sum to 1, so each value is that feature's share of the total |
+
+### Structure
+- **2,217 features in total**: 14 numerical and 2,203 one-hot encoded.
+- The encoded columns come from three categorical variables: `construction` (121 columns), `previous_pdn` (about 2,073 columns) and `month` (9 columns).
+- Only **89 features have a non-zero importance**. The rest were never used by the model.
+
+### Key findings
+- **Fabric construction is the main driver.** The top three features are all construction types and together carry about 78% of the importance: `60x60/130x80` (0.516), `40x40/100x76` (0.166) and `40x40/100x90` (0.098).
+- **Order size matters next.** `total_pdn_per_order` (0.062) and `total_pdn_m_c` (0.040) are the most important numerical features, followed by `rec_beam_length_yds` (0.016) and `fabric_allowance` (0.005).
+- **Concentrated importance.** The top 5 features account for about 89% of the total, the top 10 for 96%, and the top 50 for 99.9%.
+- **Month has a small effect.** Month columns each score below 0.4%, with March the highest (0.0037).
+- **Yarn and weave settings contribute little.** EPI, PPI, warp count, weft count and crimp all score around 0.001 or less.
+
+### Points to be aware of
+- `num__unnamed_0` appears with importance 0.0033. This is a row-index column from the original CSV that was treated as a numeric feature. It carries no real meaning and should be dropped in a future version.
+- `previous_pdn` is a high-cardinality category (thousands of values), which creates most of the 2,217 columns. Its categories also include a `TOTAL` entry. It is worth checking whether this column is appropriate to use as a feature.
+- Importance scores show how much the model used a feature, not that the feature causes rejections.
+
+---
+
+## 3. `actual_vs_predicted.csv`
+
+### Purpose
+Record-by-record comparison of the true rejection quantity and the XGBoost prediction on the test set. This is the file behind the actual-vs-predicted scatter plot and the residual analysis. It uses **XGBoost**, not the Decision Tree, because the notebook saves `predictions['XGBoost']`.
+
+### Columns
+
+| Column | Meaning |
+|--------|---------|
+| `Actual` | True rejected and cut quantity from the dataset |
+| `Predicted` | Quantity predicted by XGBoost |
+
+The error for any row is `Actual - Predicted`.
+
+### Profile of the test data
+- **24,230 records**, of which **87.4% (about 21,170) have zero rejections**. Only 3,064 records have a positive rejection quantity.
+- Mean actual rejection is 15.7 pieces, the median is 0, and the 90th, 95th and 99th percentiles are 9, 40 and 247. The maximum is 11,353 pieces.
+- The target is therefore heavily skewed: most orders have no rejections and a few have very large ones.
+
+### How accurate are the predictions?
+- Correlation between actual and predicted is **0.995**.
+- **81.5%** of predictions are within 1 piece of the true value, **88.9%** within 5 pieces, and **92.1%** within 10 pieces.
+- Average error on zero-rejection orders is only 0.51 pieces. On orders with real rejections it is 20.7 pieces, so the model finds the large cases harder.
+- The largest single miss is an order with 5,389 rejected pieces, predicted as about 3,849 (error of about 1,540 pieces).
+- The mean error is +0.12, so there is almost no systematic bias.
+
+### Things to note
+- **Negative predictions:** about 61% of predictions are slightly below zero (the minimum is about -13). These are artefacts of regression on data with many zeros. In practice, clip them to 0, for example `Predicted.clip(lower=0)`.
+- Because the metrics in the file are dominated by the many near-zero rows, MAE and R² look very strong. Check the error on the non-zero rows too when judging real-world usefulness.
+
+---
+
+## Source and License
+
+Generated from the *full_weaving_dataset* by Toufique Ahmed, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+DOI: [10.17632/nxb4shgs9h.1](https://doi.org/10.17632/nxb4shgs9h.1)
